@@ -12,6 +12,7 @@
 import type { FeishuBotAddedEvent, FeishuMessageEvent, FeishuReactionCreatedEvent } from '../messaging/types';
 import { handleFeishuMessage } from '../messaging/inbound/handler';
 import { handleFeishuReaction, resolveReactionContext } from '../messaging/inbound/reaction-handler';
+import { shouldFilterMessage, type FilterKeywordsConfig } from '../messaging/inbound/filter';
 import { isMessageExpired } from '../messaging/inbound/dedup';
 import { withTicket } from '../core/lark-ticket';
 import { larkLogger } from '../core/lark-logger';
@@ -65,6 +66,18 @@ export async function handleMessageEvent(ctx: MonitorContext, data: unknown): Pr
     const event = data as FeishuMessageEvent;
     const msgId = event.message?.message_id ?? 'unknown';
     const chatId = event.message?.chat_id ?? '';
+
+    // Keyword filter — silently drop messages matching filterKeywords config
+    // before dedup so they don't consume dedup slots.
+    const accountConfig = ctx.lark.account.config;
+    const topLevelFilterKeywords = accountConfig.filterKeywords as FilterKeywordsConfig;
+    const groupFilterConfig = chatId
+      ? ((accountConfig.groups?.[chatId] as { filterKeywords?: FilterKeywordsConfig } | undefined)?.filterKeywords ?? topLevelFilterKeywords)
+      : topLevelFilterKeywords;
+    if (shouldFilterMessage(event, groupFilterConfig, log)) {
+      return;
+    }
+
     // In topic groups, reply events carry root_id but not thread_id.
     // Use root_id as fallback so different topics get separate queue keys
     // and can be processed in parallel.

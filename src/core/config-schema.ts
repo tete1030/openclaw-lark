@@ -138,6 +138,15 @@ const DmConfigSchema = z
 // ---------------------------------------------------------------------------
 
 export const FeishuGroupSchema = z.object({
+  filterKeywords: z
+    .object({
+      keywords: z.array(z.string()).min(1),
+      mode: z.enum(['contains', 'exact']).optional().default('contains'),
+      caseSensitive: z.boolean().optional().default(false),
+      logFiltered: z.boolean().optional().default(true),
+    })
+    .strict()
+    .optional(),
   groupPolicy: GroupPolicyEnum.optional(),
   requireMention: z.boolean().optional(),
   respondToMentionAll: z.boolean().optional(),
@@ -153,6 +162,7 @@ export const FeishuGroupSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const FeishuAccountConfigSchema = z.object({
+  filterKeywords: z.array(z.string()).optional(),
   appId: z.string().optional(),
   appSecret: z.string().optional(),
   encryptKey: z.string().optional(),
