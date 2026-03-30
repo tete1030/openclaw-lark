@@ -24,6 +24,7 @@ import { looksLikeFeishuId, normalizeFeishuTarget } from '../core/targets';
 import { triggerOnboarding } from '../tools/onboarding-auth';
 import { larkLogger } from '../core/lark-logger';
 import { FEISHU_CONFIG_JSON_SCHEMA } from '../core/config-schema';
+import { monitorFeishuProvider } from './monitor';
 import { applyAccountConfig, collectFeishuSecurityWarnings, deleteAccount, setAccountEnabled } from './config-adapter';
 import {
   listFeishuDirectoryGroups,
@@ -317,7 +318,6 @@ export const feishuPlugin: ChannelPlugin<LarkAccount> = {
 
   gateway: {
     startAccount: async (ctx) => {
-      const { monitorFeishuProvider } = await import('./monitor.js');
       const account = getLarkAccount(ctx.cfg, ctx.accountId);
       const port = account.config?.webhookPort ?? null;
       ctx.setStatus({ accountId: ctx.accountId, port });
