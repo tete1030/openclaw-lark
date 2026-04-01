@@ -24,3 +24,6 @@ src/tools/docs/
 /**/.DS_Store
 
 .eslintcache
+
+# Local npm pack artifacts
+*.tgz
