@@ -14,13 +14,29 @@ import { handleFeishuMessage } from '../messaging/inbound/handler';
 import { handleFeishuReaction, resolveReactionContext } from '../messaging/inbound/reaction-handler';
 import { shouldFilterMessage, type FilterKeywordsConfig } from '../messaging/inbound/filter';
 import { isMessageExpired } from '../messaging/inbound/dedup';
+import { buildInboundPayload } from '../messaging/inbound/dispatch-builders';
+import { buildDispatchContext, resolveThreadSessionKey } from '../messaging/inbound/dispatch-context';
+import { parseMessageEvent } from '../messaging/inbound/parse';
+import { sendMessageFeishu } from '../messaging/outbound/send';
 import { withTicket } from '../core/lark-ticket';
 import { larkLogger } from '../core/lark-logger';
+import { createAccountScopedConfig } from '../core/accounts';
+import { getLarkRuntime } from '../core/runtime-store';
 import { handleCardAction } from '../tools/auto-auth';
 import { handleAskUserAction } from '../tools/ask-user-question';
 import { buildQueueKey, enqueueFeishuChatTask, getActiveDispatcher, hasActiveTask } from './chat-queue';
 import { extractRawTextFromEvent, isLikelyAbortText } from './abort-detect';
 import type { MonitorContext } from './types';
+
+type ReplyAbortRuntime = {
+  tryFastAbortFromMessage: (
+    params: {
+      ctx: ReturnType<typeof buildInboundPayload>;
+      cfg: ReturnType<typeof createAccountScopedConfig>;
+    },
+  ) => Promise<{ handled: boolean; aborted: boolean; stoppedSubagents?: number }>;
+  formatAbortReplyText: (stoppedSubagents?: number) => string;
+};
 
 const elog = larkLogger('channel/event-handlers');
 
@@ -112,6 +128,60 @@ export async function handleMessageEvent(ctx: MonitorContext, data: unknown): Pr
             error(`feishu[${accountId}]: abort fast-path abortCard failed: ${String(err)}`);
           });
         }
+      }
+
+      const accountScopedCfg = createAccountScopedConfig(ctx.cfg, accountId);
+      const parsed = await parseMessageEvent(event, ctx.lark.botOpenId, {
+        cfg: accountScopedCfg,
+        accountId,
+      });
+      const dc = buildDispatchContext({
+        ctx: parsed,
+        account: ctx.lark.account,
+        accountScopedCfg,
+        runtime: ctx.runtime,
+        commandAuthorized: false,
+      });
+      const effectiveThreadId = parsed.threadId ?? parsed.rootId;
+      if (dc.isGroup && effectiveThreadId) {
+        dc.threadSessionKey = await resolveThreadSessionKey({
+          accountScopedCfg,
+          account: ctx.lark.account,
+          chatId: parsed.chatId,
+          threadId: effectiveThreadId,
+          baseSessionKey: dc.route.sessionKey,
+        });
+      }
+      const inbound = buildInboundPayload(dc, {
+        body: parsed.content,
+        bodyForAgent: parsed.content,
+        rawBody: parsed.content,
+        commandBody: parsed.content,
+        senderName: parsed.senderName ?? parsed.senderId,
+        senderId: parsed.senderId,
+        messageSid: parsed.messageId,
+        wasMentioned: parsed.mentionAll || parsed.mentions.some((mention) => mention.isBot),
+      });
+      const runtime = getLarkRuntime();
+      const replyAbortRuntime = runtime.channel.reply as typeof runtime.channel.reply & ReplyAbortRuntime;
+      const abortResult = await replyAbortRuntime.tryFastAbortFromMessage({
+        ctx: inbound,
+        cfg: accountScopedCfg,
+      });
+      if (abortResult.handled && abortResult.aborted) {
+        const replyInThread = dc.isGroup && Boolean(effectiveThreadId);
+        await sendMessageFeishu({
+          cfg: accountScopedCfg,
+          to: dc.feishuTo,
+          text: replyAbortRuntime.formatAbortReplyText(abortResult.stoppedSubagents),
+          accountId,
+          replyToMessageId: replyInThread ? (parsed.rootId ?? parsed.messageId) : parsed.messageId,
+          replyInThread,
+        });
+        log(
+          `feishu[${accountId}]: ingress fast-stop handled for chat ${chatId}${effectiveThreadId ? ` thread ${effectiveThreadId}` : ''}`,
+        );
+        return;
       }
     }
 
