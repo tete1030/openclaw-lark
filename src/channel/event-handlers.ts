@@ -140,7 +140,7 @@ export async function handleMessageEvent(ctx: MonitorContext, data: unknown): Pr
         account: ctx.lark.account,
         accountScopedCfg,
         runtime: ctx.runtime,
-        commandAuthorized: false,
+        commandAuthorized: true,
       });
       const effectiveThreadId = parsed.threadId ?? parsed.rootId;
       if (dc.isGroup && effectiveThreadId) {
@@ -168,7 +168,7 @@ export async function handleMessageEvent(ctx: MonitorContext, data: unknown): Pr
         ctx: inbound,
         cfg: accountScopedCfg,
       });
-      if (abortResult.handled && abortResult.aborted) {
+      if (abortResult.handled) {
         const replyInThread = dc.isGroup && Boolean(effectiveThreadId);
         await sendMessageFeishu({
           cfg: accountScopedCfg,
