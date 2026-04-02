@@ -14,24 +14,58 @@ import { registerFetchDocTool } from './fetch';
 import { registerCreateDocTool } from './create';
 import { registerUpdateDocTool } from './update';
 
+function isDocMcpTraceEnabled(): boolean {
+  return process.env.OPENCLAW_TRACE_DOC_MCP === '1';
+}
+
 /**
  * 注册 MCP Doc 工具（仅保留 create/fetch/update，search/list 已由 OAPI 替代）
  */
 export function registerFeishuMcpDocTools(api: OpenClawPluginApi): void {
+  const traceEnabled = isDocMcpTraceEnabled();
   if (!api.config) {
+    if (traceEnabled) {
+      api.logger.info?.('feishu_doc trace: skip no-config');
+    }
     api.logger.debug?.('feishu_doc: No config available, skipping');
     return;
   }
 
   const accounts = getEnabledLarkAccounts(api.config);
+  if (traceEnabled) {
+    api.logger.info?.(
+      `feishu_doc trace: accounts ${JSON.stringify({
+        enabledAccountIds: accounts.map((account) => account.accountId),
+        enabledAccountCount: accounts.length,
+      })}`,
+    );
+  }
   if (accounts.length === 0) {
+    if (traceEnabled) {
+      api.logger.info?.('feishu_doc trace: skip no-enabled-accounts');
+    }
     api.logger.debug?.('feishu_doc: No Feishu accounts configured, skipping');
     return;
   }
 
   // 沿用现有 doc 开关：若所有账户都关闭 doc 工具，则 MCP doc 工具也不注册
   const toolsCfg = resolveAnyEnabledToolsConfig(accounts);
+  if (traceEnabled) {
+    api.logger.info?.(
+      `feishu_doc trace: tools ${JSON.stringify({
+        doc: toolsCfg.doc,
+        wiki: toolsCfg.wiki,
+        drive: toolsCfg.drive,
+        scopes: toolsCfg.scopes,
+        mail: toolsCfg.mail,
+        sheets: toolsCfg.sheets,
+      })}`,
+    );
+  }
   if (!toolsCfg.doc) {
+    if (traceEnabled) {
+      api.logger.info?.('feishu_doc trace: skip doc-disabled');
+    }
     api.logger.debug?.('feishu_doc: doc tool disabled in all accounts');
     return;
   }
@@ -45,6 +79,9 @@ export function registerFeishuMcpDocTools(api: OpenClawPluginApi): void {
   if (registerFetchDocTool(api)) registered.push('feishu_fetch_doc');
   if (registerCreateDocTool(api)) registered.push('feishu_create_doc');
   if (registerUpdateDocTool(api)) registered.push('feishu_update_doc');
+  if (traceEnabled) {
+    api.logger.info?.(`feishu_doc trace: registered ${registered.join(', ') || '<none>'}`);
+  }
   if (registered.length > 0) {
     api.logger.debug?.(`feishu_doc: Registered ${registered.join(', ')}`);
   }
