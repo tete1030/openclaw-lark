@@ -26,6 +26,7 @@ import { jsonResult, readReactionParams } from '../../core/sdk-compat';
 import { LarkClient } from '../../core/lark-client';
 import { getEnabledLarkAccounts } from '../../core/accounts';
 import { larkLogger } from '../../core/lark-logger';
+import { editMessageFeishu } from './send';
 import { addReactionFeishu, listReactionsFeishu, removeReactionFeishu } from './reactions';
 import { sendCardLark, sendTextLark } from './deliver';
 import { uploadAndSendMediaLark } from './media';
@@ -52,6 +53,7 @@ function assertLarkOk(res: any, context: string): void {
 
 const SUPPORTED_ACTIONS: Set<ChannelMessageActionName> = new Set([
   'send',
+  'edit',
   'react',
   'reactions',
   'delete',
@@ -188,6 +190,8 @@ export const feishuMessageActions: ChannelMessageActionAdapter = {
       switch (action) {
         case 'send':
           return await deliverMessage(cfg, readFeishuSendParams(params, toolContext), aid, ctx.mediaLocalRoots);
+        case 'edit':
+          return await handleEdit(cfg, params, aid);
         case 'react':
           return await handleReact(cfg, params, aid);
         case 'reactions':
@@ -399,4 +403,33 @@ async function handleDelete(cfg: OpenClawConfig, params: Record<string, unknown>
 
   log.info(`delete: done, messageId=${messageId}`);
   return jsonResult({ ok: true, messageId, deleted: true });
+}
+
+async function handleEdit(cfg: OpenClawConfig, params: Record<string, unknown>, accountId?: string) {
+  const messageId = readStringParam(params, 'messageId');
+  if (!messageId) {
+    throw new Error('edit requires messageId');
+  }
+
+  const text =
+    readStringParam(params, 'message', { allowEmpty: true }) ??
+    readStringParam(params, 'text', { allowEmpty: true });
+  if (text == null) {
+    throw new Error('edit requires message or text');
+  }
+
+  await editMessageFeishu({
+    cfg,
+    messageId,
+    text,
+    accountId,
+  });
+
+  return jsonResult({
+    ok: true,
+    channel: 'feishu',
+    action: 'edit',
+    messageId,
+    contentType: 'text',
+  });
 }
