@@ -92,7 +92,7 @@ interface AuthBatchEntry {
  *
  * Key 规则：
  *   用户授权：`user:${accountId}:${senderOpenId}:${messageId}`
- *   应用授权：`app:${accountId}:${chatId}:${messageId}`
+ *   应用授权：`app:${accountId}:${chatId}:${threadId}:${senderOpenId}:${messageId}`
  */
 const authBatches = new Map<string, AuthBatchEntry>();
 
@@ -265,9 +265,22 @@ interface PendingAppAuthFlow {
 /** TTL：15 分钟后自动清理，防止内存泄漏。 */
 const PENDING_FLOW_TTL_MS = 15 * 60 * 1000;
 
-/** 计算去重 key（chatId + messageId + 有序 scopes）。 */
-function makeDedupKey(chatId: string, messageId: string, scopes: string[]): string {
-  return chatId + '\0' + messageId + '\0' + [...scopes].sort().join(',');
+function makeDedupKey(ticket: LarkTicket, scopes: string[]): string {
+  return [
+    ticket.chatId,
+    ticket.threadId ?? '',
+    ticket.senderOpenId ?? '',
+    ticket.messageId,
+    [...scopes].sort().join(','),
+  ].join('\0');
+}
+
+function makeActiveCardKey(ticket: LarkTicket): string {
+  return [ticket.chatId, ticket.threadId ?? '', ticket.senderOpenId ?? '', ticket.messageId].join(':');
+}
+
+function makeAppAuthBatchKey(ticket: LarkTicket): string {
+  return `app:${ticket.accountId}:${ticket.chatId}:${ticket.threadId ?? ''}:${ticket.senderOpenId ?? ''}:${ticket.messageId}`;
 }
 
 /** 注册后的 flow，附加索引键信息 */
@@ -409,12 +422,12 @@ const deferredUserAuth = new Map<string, DeferredUserAuthEntry>();
  *   2. appAuthFlows 中的活跃流（卡片已发送，等待用户点击"已完成"）
  */
 function hasActiveAppAuthForMessage(ticket: LarkTicket): boolean {
-  const appKey = `app:${ticket.accountId}:${ticket.chatId}:${ticket.messageId}`;
+  const appKey = makeAppAuthBatchKey(ticket);
   const appEntry = authBatches.get(appKey);
   if (appEntry && (appEntry.phase === 'collecting' || appEntry.phase === 'executing')) {
     return true;
   }
-  const activeCardKey = `${ticket.chatId}:${ticket.messageId}`;
+  const activeCardKey = makeActiveCardKey(ticket);
   return !!appAuthFlows.getByActiveCardKey(activeCardKey);
 }
 
@@ -594,10 +607,10 @@ async function sendAppScopeCard(params: {
 }): Promise<ReturnType<typeof json>> {
   const { account, missingScopes, appId, scopeNeedType, tokenType, cfg, ticket } = params;
   const { accountId, chatId, messageId } = ticket;
-  const activeCardKey = `${chatId}:${messageId}`;
+  const activeCardKey = makeActiveCardKey(ticket);
 
   // ---- 去重：避免并发工具调用时发出多张内容相同的卡片 ----
-  const dedup = makeDedupKey(chatId, messageId, missingScopes);
+  const dedup = makeDedupKey(ticket, missingScopes);
   const existingEntry = appAuthFlows.getByDedupKey(dedup);
   if (existingEntry) {
     log.info(
@@ -625,7 +638,7 @@ async function sendAppScopeCard(params: {
     const newSeq = activeFlow.sequence + 1;
 
     // TOCTOU 修复：先原子迁移（同步操作），再 await 更新卡片
-    const newDedup = makeDedupKey(chatId, messageId, missingScopes);
+    const newDedup = makeDedupKey(ticket, missingScopes);
     const migrated = appAuthFlows.migrateToNewOperationId(activeOpId, newOperationId, {
       dedupKey: newDedup,
       requiredScopes: missingScopes,
@@ -765,6 +778,18 @@ export async function handleCardAction(data: unknown, cfg: ClawdbotConfig, accou
   if (!flow) {
     log.warn(`card action ${operationId} not found (expired or already handled)`);
     return;
+  }
+
+  if (!senderOpenId || !flow.ticket.senderOpenId || senderOpenId !== flow.ticket.senderOpenId) {
+    log.warn(
+      `card action ${operationId} denied: callback sender ${senderOpenId ?? 'unknown'} does not match flow owner ${flow.ticket.senderOpenId ?? 'unknown'}`,
+    );
+    return {
+      toast: {
+        type: 'error',
+        content: '该授权卡片仅限原发起人继续操作',
+      },
+    };
   }
 
   log.info(`app_auth_done clicked by ${senderOpenId}, operationId=${operationId}`);
@@ -981,7 +1006,7 @@ export async function handleInvokeErrorWithAutoAuth(err: unknown, cfg: ClawdbotC
               { account: acct, cfg, ticket },
               async (mergedScopes) => {
                 // 等待同一消息的 app auth 卡片先发出
-                const appKey = `app:${ticket.accountId}:${ticket.chatId}:${ticket.messageId}`;
+                const appKey = makeAppAuthBatchKey(ticket);
                 const appEntry = authBatches.get(appKey);
                 if (appEntry?.resultPromise) {
                   await appEntry.resultPromise.catch(() => {});
@@ -1032,7 +1057,7 @@ export async function handleInvokeErrorWithAutoAuth(err: unknown, cfg: ClawdbotC
               { account: acct, cfg, ticket },
               async (mergedScopes) => {
                 // 等待同一消息的 app auth 卡片先发出
-                const appKey = `app:${ticket.accountId}:${ticket.chatId}:${ticket.messageId}`;
+                const appKey = makeAppAuthBatchKey(ticket);
                 const appEntry = authBatches.get(appKey);
                 if (appEntry?.resultPromise) {
                   await appEntry.resultPromise.catch(() => {});
@@ -1073,7 +1098,7 @@ export async function handleInvokeErrorWithAutoAuth(err: unknown, cfg: ClawdbotC
             log.info(`AppScopeMissingError → deferred allRequiredScopes=[${appScopeErr.allRequiredScopes.join(', ')}]`);
           }
 
-          const bufferKey = `app:${ticket.accountId}:${ticket.chatId}:${ticket.messageId}`;
+          const bufferKey = makeAppAuthBatchKey(ticket);
           log.info(
             `AppScopeMissingError → enqueue, key=${bufferKey}, ` + `scopes=[${appScopeErr.missingScopes.join(', ')}]`,
           );
