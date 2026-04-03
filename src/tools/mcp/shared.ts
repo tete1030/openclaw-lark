@@ -12,6 +12,8 @@ import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import type { TSchema } from '@sinclair/typebox';
 import { createToolContext, formatToolResult, registerTool } from '../helpers';
 import { handleInvokeErrorWithAutoAuth } from '../oapi/helpers';
+import { larkLogger } from '../../core/lark-logger';
+import { fingerprintSecret, isDocMcpTraceEnabled } from '../../core/mcp-trace';
 import { getUserAgent } from '../../core/version';
 import { mcpDomain } from '../../core/domains';
 import type { LarkBrand } from '../../core/types';
@@ -45,6 +47,8 @@ export interface McpToolConfig<T = unknown> {
   schema: TSchema;
   validate?: (params: T) => void;
 }
+
+const mcpLog = larkLogger('tools/mcp/shared');
 
 // ---------------------------------------------------------------------------
 // 辅助函数
@@ -146,6 +150,18 @@ function buildAuthHeader(): string | undefined {
   return token.toLowerCase().startsWith('bearer ') ? token : `Bearer ${token}`;
 }
 
+function shouldTraceDocMcpTool(name: string): boolean {
+  return isDocMcpTraceEnabled() && (name === 'create-doc' || name === 'update-doc' || name === 'fetch-doc');
+}
+
+function getEndpointOrigin(endpoint: string): string {
+  try {
+    return new URL(endpoint).origin;
+  } catch {
+    return endpoint;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // MCP JSON-RPC 客户端
 // ---------------------------------------------------------------------------
@@ -185,6 +201,19 @@ export async function callMcpTool(
     'User-Agent': getUserAgent(),
   };
   if (auth) headers.authorization = auth;
+
+  if (shouldTraceDocMcpTool(name)) {
+    mcpLog.info('doc MCP outbound request', {
+      correlationId: toolCallId,
+      mcpToolName: name,
+      endpointOrigin: getEndpointOrigin(endpoint),
+      allowedTool: name,
+      brand,
+      uatHash: fingerprintSecret(uat),
+      uatLength: uat.length,
+      hasAuthorizationHeader: Boolean(auth),
+    });
+  }
 
   const res = await fetch(endpoint, {
     method: 'POST',
@@ -260,6 +289,7 @@ export function registerMcpTool<T extends Record<string, unknown>>(
             },
             {
               as: 'user',
+              correlationId: toolCallId,
             },
           );
 

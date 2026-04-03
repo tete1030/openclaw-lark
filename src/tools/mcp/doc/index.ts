@@ -8,15 +8,12 @@
 
 import type { OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import { getEnabledLarkAccounts } from '../../../core/accounts';
+import { isDocMcpTraceEnabled } from '../../../core/mcp-trace';
 import { resolveAnyEnabledToolsConfig } from '../../../core/tools-config';
 import { extractMcpUrlFromConfig, setMcpEndpointOverride } from '../shared';
 import { registerFetchDocTool } from './fetch';
 import { registerCreateDocTool } from './create';
 import { registerUpdateDocTool } from './update';
-
-function isDocMcpTraceEnabled(): boolean {
-  return process.env.OPENCLAW_TRACE_DOC_MCP === '1';
-}
 
 /**
  * 注册 MCP Doc 工具（仅保留 create/fetch/update，search/list 已由 OAPI 替代）
