@@ -39,6 +39,7 @@ import { getStoredToken } from './token-store';
 import { getAppGrantedScopes, invalidateAppScopeCache, missingScopes } from './app-scope-checker';
 import { getAppOwnerFallback } from './app-owner-fallback';
 import { larkLogger } from './lark-logger';
+import { fingerprintSecret, isDocMcpTraceEnabled } from './mcp-trace';
 import { type ToolActionKey, getRequiredScopes } from './scope-manager';
 import { rawLarkRequest } from './raw-request';
 import { assertOwnerAccessStrict } from './owner-policy';
@@ -92,8 +93,13 @@ export interface InvokeOptions {
   as?: 'user' | 'tenant';
   /** 覆盖 senderOpenId。 */
   userOpenId?: string;
+  correlationId?: string;
   /** 直接指定所需 scopes，跳过从 meta.json 读取。宽松模式：只要应用拥有部分 scope（交集非空）即可调用。 */
   /** 严格模式：指定所需 scopes，应用必须拥有所有 scope，缺一个都会报 AppScopeMissingError。 */
+}
+
+function shouldTraceDocMcp(toolAction: ToolActionKey): boolean {
+  return isDocMcpTraceEnabled() && toolAction.startsWith('feishu_') && toolAction.includes('_doc.');
 }
 
 /** invokeByPath() 的选项 — 在 InvokeOptions 基础上增加 HTTP 请求参数。 */
@@ -232,13 +238,21 @@ export class ToolClient {
     }
 
     // 5.1 获取 userOpenId，支持兜底逻辑
+    const requestedUserOpenId = options?.userOpenId;
+    const correlationId = options?.correlationId;
     let userOpenId = options?.userOpenId ?? this.senderOpenId;
+    let selectionSource: 'explicit' | 'sender' | 'fallback_owner' | 'missing' = requestedUserOpenId
+      ? 'explicit'
+      : this.senderOpenId
+        ? 'sender'
+        : 'missing';
 
     // 5.2 兜底逻辑：如果没有 senderOpenId，尝试使用应用所有者
     if (!userOpenId) {
       const fallbackUserId = await getAppOwnerFallback(this.account, this.sdk);
       if (fallbackUserId) {
         userOpenId = fallbackUserId;
+        selectionSource = 'fallback_owner';
         tcLog.info(`Using app owner as fallback user`, {
           toolAction,
           appId: this.account.appId,
@@ -247,7 +261,21 @@ export class ToolClient {
       }
     }
 
-    return this.invokeAsUser(toolAction, fn, requiredScopes, userOpenId, appScopeVerified);
+    if (shouldTraceDocMcp(toolAction)) {
+      tcLog.info('doc MCP acting user selected', {
+        correlationId,
+        toolAction,
+        tokenType,
+        requestedUserOpenId,
+        senderOpenId: this.senderOpenId,
+        selectedUserOpenId: userOpenId,
+        selectionSource,
+        appId: this.account.appId,
+        brand: this.account.brand,
+      });
+    }
+
+    return this.invokeAsUser(toolAction, fn, requiredScopes, userOpenId, appScopeVerified, correlationId);
   }
 
   /**
@@ -320,6 +348,7 @@ export class ToolClient {
     requiredScopes: string[],
     userOpenId: string | undefined,
     appScopeVerified: boolean,
+    correlationId?: string,
   ): Promise<T> {
     if (!userOpenId) {
       throw new UserAuthRequiredError('unknown', {
@@ -377,7 +406,20 @@ export class ToolClient {
           appSecret: this.account.appSecret,
           domain: this.account.brand,
         },
-        (accessToken) => fn(this.sdk, Lark.withUserAccessToken(accessToken), accessToken),
+        (accessToken) => {
+          if (shouldTraceDocMcp(toolAction)) {
+            tcLog.info('doc MCP UAT bound', {
+              correlationId,
+              toolAction,
+              selectedUserOpenId: userOpenId,
+              appId: this.account.appId,
+              brand: this.account.brand,
+              uatHash: fingerprintSecret(accessToken),
+              uatLength: accessToken.length,
+            });
+          }
+          return fn(this.sdk, Lark.withUserAccessToken(accessToken), accessToken);
+        },
       );
     } catch (err) {
       if (err instanceof NeedAuthorizationError) {
