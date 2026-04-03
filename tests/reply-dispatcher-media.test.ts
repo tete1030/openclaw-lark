@@ -47,7 +47,11 @@ vi.mock('../src/core/lark-client', () => ({
         },
         reply: {
           createReplyDispatcherWithTyping: (hooks: { deliver: unknown; onError: unknown }) => ({
-            dispatcher: { deliver: hooks.deliver, onError: hooks.onError },
+            dispatcher: {
+              deliver: hooks.deliver,
+              onError: hooks.onError,
+              getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+            },
             replyOptions: {},
             markDispatchIdle: () => {},
           }),
@@ -88,12 +92,16 @@ let terminateReturn = true;
 const terminateCalls: Array<{ source: string; err: unknown }> = [];
 vi.mock('../src/card/unavailable-guard', () => ({
   UnavailableGuard: class {
-    shouldSkip() { return false; }
+    shouldSkip() {
+      return false;
+    }
     terminate(source: string, err?: unknown) {
       terminateCalls.push({ source, err });
       return terminateReturn;
     }
-    get isTerminated() { return false; }
+    get isTerminated() {
+      return false;
+    }
   },
 }));
 
@@ -109,16 +117,21 @@ import { createFeishuReplyDispatcher } from '../src/card/reply-dispatcher';
 // ---------------------------------------------------------------------------
 
 interface TestContext {
-  dispatcher: { deliver: (payload: Record<string, unknown>) => Promise<void> };
+  dispatcher: {
+    deliver: (payload: Record<string, unknown>) => Promise<void>;
+    getFailedCounts: () => Record<string, number>;
+  };
   sentText: unknown[];
   sentCards: unknown[];
   sentMedia: unknown[];
 }
 
-function createDispatcher(options: {
-  sendMediaImpl?: (payload: unknown) => Promise<void>;
-  terminateReturn?: boolean;
-} = {}): TestContext {
+function createDispatcher(
+  options: {
+    sendMediaImpl?: (payload: unknown) => Promise<void>;
+    terminateReturn?: boolean;
+  } = {},
+): TestContext {
   const sentText: unknown[] = [];
   const sentCards: unknown[] = [];
   const sentMedia: unknown[] = [];
@@ -127,10 +140,18 @@ function createDispatcher(options: {
   terminateReturn = options.terminateReturn ?? true;
   terminateCalls.length = 0;
 
-  mockSendMessageFeishu.mockImplementation(async (payload: unknown) => { sentText.push(payload); });
-  mockSendMarkdownCardFeishu.mockImplementation(async (payload: unknown) => { sentCards.push(payload); });
+  mockSendMessageFeishu.mockImplementation(async (payload: unknown) => {
+    sentText.push(payload);
+  });
+  mockSendMarkdownCardFeishu.mockImplementation(async (payload: unknown) => {
+    sentCards.push(payload);
+  });
 
-  const sendMediaImpl = options.sendMediaImpl ?? (async (payload: unknown) => { sentMedia.push(payload); });
+  const sendMediaImpl =
+    options.sendMediaImpl ??
+    (async (payload: unknown) => {
+      sentMedia.push(payload);
+    });
   mockSendMediaLark.mockImplementation(sendMediaImpl);
 
   const result = createFeishuReplyDispatcher({
@@ -163,6 +184,12 @@ beforeEach(() => {
 });
 
 describe('reply-dispatcher media delivery', () => {
+  it('returns the SDK failed-counts method unchanged', () => {
+    const ctx = createDispatcher();
+
+    expect(ctx.dispatcher.getFailedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
+  });
+
   it('media-only payload does not send empty text message', async () => {
     const ctx = createDispatcher();
 
@@ -193,7 +220,9 @@ describe('reply-dispatcher media delivery', () => {
   it('failed media send triggers staticGuard terminate', async () => {
     const mediaError = new Error('bot removed from chat');
     const ctx = createDispatcher({
-      sendMediaImpl: async () => { throw mediaError; },
+      sendMediaImpl: async () => {
+        throw mediaError;
+      },
       terminateReturn: true,
     });
 

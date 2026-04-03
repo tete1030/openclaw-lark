@@ -136,6 +136,7 @@ export interface ReplyDispatcher {
   sendFinalReply: (payload: ReplyPayload) => boolean;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<string, number>;
+  getFailedCounts: () => Record<string, number>;
   markComplete: () => void;
 }
 
