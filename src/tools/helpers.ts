@@ -11,6 +11,7 @@ import type { ClawdbotConfig, OpenClawPluginApi } from 'openclaw/plugin-sdk';
 import type { Client as LarkSdkClient } from '@larksuiteoapi/node-sdk';
 import { getEnabledLarkAccounts, getLarkAccount } from '../core/accounts';
 import { LarkClient, getResolvedConfig } from '../core/lark-client';
+import { withRequesterSenderId } from '../core/requester-sender-scope';
 import type { LarkAccount } from '../core/types';
 import { getTicket } from '../core/lark-ticket';
 import type { ToolClient } from '../core/tool-client';
@@ -221,6 +222,42 @@ export function createToolContext(
   };
 }
 
+type RegisteredTool = Parameters<OpenClawPluginApi['registerTool']>[0];
+type ToolFactory = Extract<RegisteredTool, (...args: never[]) => unknown>;
+type ToolFactoryContext = { requesterSenderId?: string };
+type ExecutableTool = RegisteredTool extends (...args: never[]) => unknown
+  ? never
+  : Exclude<RegisteredTool, ToolFactory>;
+
+function wrapToolExecute(tool: ExecutableTool, requesterSenderId?: string): ExecutableTool {
+  if (!tool.execute) return tool;
+  const execute = tool.execute.bind(tool);
+  return {
+    ...tool,
+    execute: (toolCallId, params, signal, onUpdate) =>
+      withRequesterSenderId(requesterSenderId, () => execute(toolCallId, params, signal, onUpdate)),
+  } as ExecutableTool;
+}
+
+function wrapRegisteredTool(tool: RegisteredTool): RegisteredTool {
+  if (typeof tool !== 'function') {
+    return wrapToolExecute(tool) as RegisteredTool;
+  }
+
+  const factory = tool as ToolFactory;
+  return ((...args: Parameters<ToolFactory>) => {
+    const [ctx] = args as [ToolFactoryContext, ...unknown[]];
+    const produced = factory(...args);
+    if (Array.isArray(produced)) {
+      return produced.map((item) => wrapToolExecute(item as ExecutableTool, ctx?.requesterSenderId));
+    }
+    if (produced) {
+      return wrapToolExecute(produced as ExecutableTool, ctx?.requesterSenderId);
+    }
+    return produced;
+  }) as ToolFactory;
+}
+
 // ---------------------------------------------------------------------------
 // 工具注册检查
 // ---------------------------------------------------------------------------
@@ -285,7 +322,7 @@ export function registerTool(
 
   if (!toolName) {
     // 如果无法提取工具名，直接注册（不拦截）
-    api.registerTool(tool, opts);
+    api.registerTool(wrapRegisteredTool(tool), opts);
     return true;
   }
 
@@ -295,7 +332,7 @@ export function registerTool(
   }
 
   // 通过检查，调用原始的 registerTool
-  api.registerTool(tool, opts);
+  api.registerTool(wrapRegisteredTool(tool), opts);
   return true;
 }
 

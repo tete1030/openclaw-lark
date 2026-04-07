@@ -34,6 +34,7 @@ import type { ConfiguredLarkAccount } from './types';
 import { getEnabledLarkAccounts, getLarkAccount } from './accounts';
 import { LarkClient, getResolvedConfig } from './lark-client';
 import { getTicket } from './lark-ticket';
+import { getRequesterSenderId } from './requester-sender-scope';
 import { callWithUAT } from './uat-client';
 import { getStoredToken } from './token-store';
 import { getAppGrantedScopes, invalidateAppScopeCache, missingScopes } from './app-scope-checker';
@@ -120,7 +121,6 @@ export class ToolClient {
   /** 当前解析的账号信息（appId、appSecret 保证存在）。 */
   readonly account: ConfiguredLarkAccount;
 
-  /** 当前请求的用户 open_id（来自 LarkTicket，可能为 undefined）。 */
   readonly senderOpenId: string | undefined;
 
   /** Lark SDK 实例（TAT 身份），直接调用即可。 */
@@ -516,8 +516,15 @@ export class ToolClient {
  * @param config - OpenClaw 配置对象
  * @param accountIndex - 回退账号索引（默认 0）
  */
-export function createToolClient(config: ClawdbotConfig, accountIndex = 0): ToolClient {
+export function createToolClient(
+  config: ClawdbotConfig,
+  accountIndex = 0,
+  options?: {
+    requesterSenderId?: string;
+  },
+): ToolClient {
   const ticket = getTicket();
+  const requesterSenderId = options?.requesterSenderId?.trim() || getRequesterSenderId();
 
   // 1. 解析账号
   //
@@ -567,7 +574,7 @@ export function createToolClient(config: ClawdbotConfig, accountIndex = 0): Tool
   // 3. 组装 ToolClient
   return new ToolClient({
     account,
-    senderOpenId: ticket?.senderOpenId,
+    senderOpenId: requesterSenderId ?? ticket?.senderOpenId,
     sdk: larkClient.sdk,
     config,
   });
