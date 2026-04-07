@@ -680,7 +680,7 @@ export async function executeAuthorize(
   const scopeCount = filteredScope.split(/\s+/).filter(Boolean).length;
   let message = isBatchAuth
     ? `已发送批量授权请求卡片，共需授权 ${scopeCount} 个权限。请在卡片中完成授权。`
-    : '已发送授权请求卡片，请用户在卡片中点击链接完成授权。授权完成后请重新执行之前的操作。';
+    : '已发送授权请求卡片。请点击授权卡片完成授权，授权后我会自动继续执行，不必回复"继续"。';
 
   if (batchInfo) {
     message += batchInfo;
