@@ -241,7 +241,7 @@ function wrapToolExecute(tool: ExecutableTool, requesterSenderId?: string): Exec
 
 function wrapRegisteredTool(tool: RegisteredTool): RegisteredTool {
   if (typeof tool !== 'function') {
-    return wrapToolExecute(tool) as RegisteredTool;
+    return ((ctx: ToolFactoryContext) => wrapToolExecute(tool, ctx?.requesterSenderId)) as ToolFactory;
   }
 
   const factory = tool as ToolFactory;
